@@ -83,11 +83,8 @@ CHAIN = [
 
     # ---------------------------------------------------------------- PLATAFORMA
     # Linha de produto SEPARADA (gelo flutuante), com máscara própria e
-    # referencial lagrangiano. Estava inteiramente FORA da cadeia e foi rodada à
-    # mão só para o JJA — quando o DJF terminou, não tinha nenhum produto de
-    # plataforma, e a comparação sazonal ficaria impossível justamente onde o
-    # derretimento basal acontece. Mesmo padrão do run_qc_report: etapa
-    # essencial que só existia na memória de quem rodou.
+    # referencial lagrangiano. A execução para cada perfil sazonal é necessária
+    # para permitir comparação onde o derretimento basal ocorre.
     ("run_shelf_mask",    "máscara de plataforma (flutuante) -> atl06_shelf",       6, []),
     ("run_shelf_lagrangian", "trajetórias de parcelas (RK4, ITS_LIVE)",            15, []),
     ("run_shelf_windows", "janelas móveis lagrangianas por parcela",               15, []),
