@@ -1,0 +1,9 @@
+# Ramo JJA reprocessado com classificacao de aterramento espaco-temporal.
+# Isola tiles, dh/dt, tabelas e figuras dos produtos historicos baseados apenas
+# no BedMachine v4 e em buffers fixos.
+project:
+  experiment: "jja_spacetime"
+
+season:
+  name: "jja_spacetime"
+  months: [6, 7, 8]

@@ -1,0 +1,545 @@
+# ============================================================================
+# config/default.yaml — configuração base do pipeline Thwaites/ICESat-2
+# ----------------------------------------------------------------------------
+# Fonte ÚNICA de parâmetros. Perfis (config/jja.yaml, config/anual.yaml)
+# sobrescrevem seções específicas via merge profundo.
+#
+# PRINCÍPIO: nenhum valor aqui é justificado por "foi o que o
+# artigo publicou". Cada parâmetro carrega sua justificativa própria (física,
+# estatística ou computacional). Parâmetros que devem ser DERIVADOS DOS DADOS
+# aparecem como `null` com a marca [DATA-DRIVEN] e são estimados no pipeline.
+# ============================================================================
+
+project:
+  name: "thwaites-icesat2"
+  # Estação/experimento ativo (informativo; sobrescrito pelo perfil).
+  experiment: "default"
+
+# ---- Escopo geográfico (fixo — é a região de estudo, não um parâmetro) -----
+area:
+  lon_min: -114.5
+  lon_max: -69.0
+  lat_min: -80.0
+  lat_max: -68.5
+  epsg_lonlat: 4326        # dados brutos ICESat-2 (geográfico)
+  epsg_polar: 3031         # WGS84 / Antarctic Polar Stereographic
+
+# ---- Recorte de processamento (ROI) — mais perto da Geleira Thwaites -------
+# O download usou a bbox `area` (ampla, ~toda a Amundsen -> ~1,75 bi de pontos).
+# Aqui recortamos para PROCESSAR só perto da Thwaites, SEM apagar arquivos: o
+# consolidate filtra os pontos por esta bbox e registra num log os grânulos que
+# ficam totalmente de fora. [AJUSTE À VONTADE — proposta capturando Thwaites +
+# entorno imediato.]
+roi:
+  # AMUNDSEN SEA EMBAYMENT (ASE) — nucleo da Antartica Ocidental.
+  # Cobre Thwaites + Pine Island + Smith/Kohler/Pope: os principais
+  # descarregadores da regiao. Volume medido: 62,0 M pontos (2,4x a ROI
+  # anterior, que era so a Thwaites: -112..-103 / -77,5..-74,3 -> 24,2 M).
+  # Viavel apos as correcoes de memoria (pico fixado pelo LOTE, nao pelo total).
+  label: "Amundsen Sea Embayment (Thwaites, Pine Island, Smith/Kohler/Pope)"
+  lon_min: -115.0
+  lon_max: -95.0
+  lat_min: -77.5
+  lat_max: -73.0
+
+# ---- Janela temporal (fixa — período de cobertura do estudo) ---------------
+temporal:
+  year_start: 2019
+  year_end: 2025
+
+# ---- Janela sazonal (DECISÃO ABERTA — sobrescrita pelos perfis) ------------
+# Base = inverno austral (JJA). O perfil anual.yaml expande para 12 meses.
+season:
+  name: "jja"
+  months: [6, 7, 8]
+
+# ---- Produto ICESat-2 ------------------------------------------------------
+product:
+  short_name: "ATL06"     # Land Ice Height (sensor ATLAS)
+  version: "007"
+  beams: ["gt1l", "gt1r", "gt2l", "gt2r", "gt3l", "gt3r"]
+  segments_group: "land_ice_segments"
+  geophysical_group: "geophysical"   # land_ice_segments/geophysical/
+  # Variáveis nucleares extraídas (SOMENTE estas — nada além é lido do .h5).
+  variables:
+    latitude:  "latitude"
+    longitude: "longitude"
+    height:    "h_li"
+    sigma:     "h_li_sigma"
+    delta_t:   "delta_time"
+    quality:   "atl06_quality_summary"
+  # Variáveis de correção geofísica (grupo geophysical) extraídas junto e
+  # guardadas como colunas separadas — o .h5 bruto é deletado, então tudo que
+  # pode ser útil depois precisa sair agora.
+  # [VERIFICADO — ATL06 ATBD r004 p.45: o grupo geophysical contém correções
+  #  "that may be added to or removed from h_li"; logo tide_ocean/dac NÃO vêm
+  #  aplicados em h_li.]
+  #  - tide_equilibrium: maré de longo período; guardada p/ compor a maré
+  #    oceânica completa (tide_ocean + tide_equilibrium) se desejado. Não aplicada por padrão.
+  #  - geoid: guardado p/ backlog #4 (viés geoidal). Não aplicado.
+  # Sintaxe "grupo/variavel" quando a variavel NAO esta em `geophysical_group`.
+  # BUG CORRIGIDO: `geoid` estava declarado como "geoid" e portanto era buscado
+  # em land_ice_segments/geophysical/, onde NAO existe. O ATL06 guarda o geoide
+  # em land_ice_segments/dem/geoid_h. O extrator nao encontrava a variavel,
+  # caia no ramo de fallback e preenchia NaN — resultado: a coluna `geoid` de
+  # TODO o dataset ficou 100% NaN, sem nenhum erro visivel. Isso tambem
+  # explicava por que o backlog #4 (vies geoidal) nunca pode avancar.
+  correction_vars:
+    tide_ocean:       "tide_ocean"
+    tide_equilibrium: "tide_equilibrium"
+    dac:              "dac"
+    geoid:            "dem/geoid_h"
+  # Época ATLAS = 2018-01-01 00:00:00 UTC; delta_time em s desde a época.
+  # Conversão para ano decimal ignora leap seconds (erro < 1 min/ano).
+  atlas_epoch_year: 2018.0
+  seconds_per_year: 31557600.0   # 365.25 * 24 * 3600
+
+# ---- Controle de qualidade da extração -------------------------------------
+qc:
+  quality_max: 1          # 0=melhor, 1=boa; descarta 2 (ruim)
+  fill_value: 3.0e30      # h_li acima disso é fill (~3.4e38) -> inválido
+  h_min_valid: -500.0     # elevações abaixo disso são fisicamente absurdas
+
+# ---- Máscara BedMachine (você baixará o arquivo depois) --------------------
+mask:
+  # [CONFIRMAR ao baixar] caminho e formato reais. Se relativo, resolvido sob
+  # data/. O scratch usava um GeoTIFF da Antártica inteira (lido por janela).
+  bedmachine_path: "BedMachineAntarctica.tif"
+  mask_variable: "mask"       # banda/variável de máscara
+  # [VERIFICADO no atributo flag_meanings do BedMachine v4]
+  #   0 ocean | 1 ice_free_land | 2 grounded_ice | 3 floating_ice | 4 lake_vostok
+  # Este `keep_values` é a máscara LARGA (tudo menos oceano), usada na etapa de
+  # extração. O recorte científico é feito depois, por `grounded` (abaixo).
+  keep_values: [1, 2, 3, 4]
+  floating_class: 3           # BedMachine: 3 = gelo flutuante (para gating de maré)
+
+# ---- Máscara de GELO ATERRADO (recorte científico) -------------------------
+# O alvo declarado da análise é gelo continental apoiado no substrato. A máscara
+# larga acima NÃO garante isso: medido nesta ROI, ela deixava passar 10,4% dos
+# pontos (5,67 M em plataforma + 50 mil em rocha) e 19,4% dos NÓS de dh/dt
+# ficavam fora do gelo aterrado — inclusive 771 nós sobre OCEANO, porque os nós
+# ficam numa grade regular e o raio de busca de 15 km alcança pontos de terra a
+# partir de uma posição oceânica.
+grounded:
+  enabled: true
+  # Buffer a partir da linha de aterramento (fronteira grounded/floating no
+  # BedMachine). Justificativa FÍSICA: a zona de aterramento sofre flexão de
+  # maré, que se propaga continente adentro tipicamente por 1–10 km; ali o sinal
+  # periódico é real, não erro, e contamina a taxa. 5 km é o valor central dessa
+  # faixa. Sensibilidade medida: mediana de dh/dt varia só de −0,300 (sem
+  # buffer) a −0,316 m/ano (buffer 20 km) — o resultado é robusto ao valor
+  # exato; o que importa de fato é excluir as CLASSES erradas.
+  buffer_grounding_line_m: 5000
+  # Buffer a partir de qualquer superfície não-aterrada (oceano, rocha,
+  # plataforma). Justificativa GEOMÉTRICA: segmentos ATL06 têm 40 m e a
+  # geolocalização tem erro de metros; 2 km é folga ampla contra mistura de
+  # sinal de superfícies vizinhas, sem custo relevante de cobertura.
+  buffer_coast_m: 2000
+  # Os NÓS também são filtrados por posição — não basta filtrar os pontos, já
+  # que um nó fora do gelo aterrado consegue reunir pontos válidos dentro do
+  # raio de busca e produzir um dh/dt aparentemente legítimo.
+  filter_nodes: true
+  # Fração mínima do raio de busca que precisa estar em gelo aterrado para o nó
+  # ser aceito. Controla efeito de borda: um nó na margem enxerga meia
+  # vizinhança e sua estimativa é assimétrica.
+  min_grounded_fraction: 0.5
+
+# ---- Filtro de qualidade pelos flags nativos do ATL06 ----------------------
+# Os flags foram re-extraidos por pipelines/fetch_qc_flags.py (1.106 granulos,
+# 118,6 M linhas) porque a extracao original nao os guardou -- e porque o
+# filtro antigo (`qc.quality_max: 1`) NUNCA filtrou nada: o flag e BINARIO
+# (0 = best_quality, 1 = potential_problem), entao `<= 1` mantinha tudo.
+#
+# Cada limiar abaixo foi escolhido por EVIDENCIA DE IMPACTO medida sobre 175
+# granulos amostrados (11,58 M pontos na ROI), nao por convencao. Criterio:
+# so entra o filtro cujo ganho de qualidade justifique o custo em cobertura.
+# Limiar `null` = criterio DESLIGADO por decisao declarada, nao por omissao.
+#
+# Efeito combinado medido: remove 8,03% dos pontos; o p99 de h_robust_sprd cai
+# de 2,64 m para 0,78 m (-70% na cauda) enquanto a MEDIANA fica praticamente
+# igual (0,1652 -> 0,1600 m) -- assinatura de filtro que corta outlier sem
+# degradar o dado bom.
+atl06_qc:
+  enabled: true
+  flags_dir: "qc_flags"
+
+  # LIGADO (custo 2,63%): pontos com flag 1 tem h_robust_sprd 0,818 m contra
+  # 0,163 m dos com flag 0 (5x pior) e |h - dem_h| 3,30 contra 1,94 m.
+  # Discrimina qualidade de forma clara e custa pouco.
+  require_quality_summary_zero: true
+
+  # LIGADO (custo 3,20%): dispersao robusta do ajuste do segmento. E o
+  # discriminante mais direto de superficie fraturada (crevasses), dominante
+  # nas geleiras de fluxo rapido do ASE. 1,0 m fica entre o p90 (0,42) e o
+  # p99 (2,64) da distribuicao.
+  max_h_robust_sprd_m: 1.0
+
+  # LIGADO (custo 3,66%): remove APENAS msw_flag == 5 (neve soprada com
+  # profundidade optica >= 0,5), que tem h_robust_sprd 0,236 contra 0,146 do
+  # msw == 0. NAO usar limiar menor: msw == 1 e nuvem ACIMA de 3 km, inofensiva
+  # para a medida de superficie, e `msw > 2` custaria 42,5% da amostra.
+  max_msw_flag: 4
+
+  # LIGADO (custo 0,21%): blunder grosseiro contra o DEM embutido no produto.
+  # 100 m e deliberadamente generoso: a Thwaites afina metros por ano e o DEM
+  # de referencia tem epoca fixa, entao diferencas de dezenas de metros podem
+  # ser MUDANCA REAL. Um limiar de 50 m removeria 0,99% e comecaria a cortar
+  # sinal.
+  max_dem_diff_m: 100.0
+
+  # DESLIGADO por decisao: custaria 51,76% da amostra para um ganho marginal
+  # (h_robust_sprd mediano 0,145 no "clear" contra 0,202 no "cloudy" -- 0,06 m
+  # de diferenca), e |h - dem_h| nem sequer piora com nuvem (2,26 m no clear=0
+  # contra 1,86 m no cloudy=5). Verificado tambem que o flag NAO e invalidado
+  # pela noite polar: 95,1% dos dados tem sol abaixo do horizonte e a
+  # distribuicao e igual a do dia (48,3% vs 47,2% "clear"), porque a
+  # refletancia aparente do ATL09 vem do retorno do proprio laser.
+  max_cloud_flg_asr: null
+
+  # DESLIGADO: efeito fraco (0,186 contra 0,159 de h_robust_sprd) para 27,6%
+  # de custo. O caso severo de neve soprada ja sai por max_msw_flag.
+  max_bsnow_conf: null
+
+  # DESLIGADO: nao discrimina nada nesta amostra -- p50, p90, p99 e p99,9 sao
+  # todos 0,0000. Ligar seria teatro de rigor.
+  max_snr_significance: null
+
+  # DESLIGADO: o proprio ATL06 ja edita por numero de fotons antes de publicar
+  # o segmento; um segundo corte aqui seria redundante e sem criterio proprio.
+  min_n_fit_photons: null
+
+# ---- Dominio de PLATAFORMA (gelo flutuante) --------------------------------
+# Produto SEPARADO do gelo aterrado; nunca misturar. Mascara PROPRIA, nao
+# negacao da mascara aterrada.
+shelf:
+  enabled: true
+  # 3 km: valor usado por Adusumilli et al. (2018, GRL) nas plataformas da
+  # Peninsula Antartica — "excluded all RA data less than 3 km from the
+  # grounding line; this minimized contamination from the flexural boundary
+  # layer near the grounding zone where the ice is not fully hydrostatic and
+  # tide-model corrections are not valid".
+  # Antes usavamos 5 km (mais conservador); 3 km alinha ao padrao publicado e
+  # recupera cobertura na zona de maior derretimento.
+  # RESSALVA do proprio artigo: excluir a zona de aterramento SUBESTIMA o
+  # derretimento basal, porque e justamente ali que ele e maior.
+  buffer_grounding_zone_m: 3000.0
+  # Envelope de segurança para o lado do gelo da linha IceLines. O valor é
+  # parâmetro de sensibilidade (não herança do artigo anterior): o produto deve
+  # reportar resultados também para envelopes alternativos antes de ser
+  # promovido de exploratório.
+  buffer_front_m: 5000.0
+  # Produto EXTERNO IceLines/Sentinel-1. Época e plataforma são escolhidas
+  # antes do teste espacial; nunca se usa uma época global comum às plataformas.
+  dynamic_front_enabled: true
+  fronts_path: "calving_fronts.parquet"
+  # Densificação é apenas aproximação computacional da linha, não resolução do
+  # produto final. 500 m é menor que o envelope de incerteza testado acima.
+  front_densify_step_m: 500.0
+  # Pontos mais distantes de qualquer frente não recebem plataforma por
+  # adivinhação. As distâncias e a fração não testada são registradas.
+  front_assignment_max_m: 150000.0
+  front_max_search_m: 100000.0
+  # Impede extrapolação temporal silenciosa de frentes antigas. Getz, cuja
+  # série local termina em 2021, será explicitamente não testada depois disso.
+  # Frentes até ~90 dias recebem confiança temporal alta. Entre ~90 e
+  # ~183 dias permanecem rastreáveis como baixa confiança; acima disso são
+  # excluídas do produto principal.
+  front_preferred_epoch_gap_years: 0.25
+  front_max_epoch_gap_years: 0.50
+  # Sem plataforma, época contemporânea ou linha próxima, exclui do produto
+  # principal; análises de sensibilidade podem relaxar isso separadamente.
+  front_fail_closed: true
+  exploratory: true
+
+
+# ---- Correções geofísicas (aplicadas explicitamente) -----------------------
+corrections:
+  # Correções SUBTRAÍDAS de h_elv. tide_ocean e dac NÃO vêm aplicadas em h_li
+  # no ATL06 — são fornecidas para aplicar sobre gelo flutuante.
+  # [VERIFICADO]:
+  #  (a) não-aplicadas em h_li — ATL06 ATBD r004 p.45 (grupo geophysical:
+  #      correções "may be added to or removed from h_li"); já aplicadas em
+  #      h_li: ocean loading, solid/ocean pole tides, solid earth tide
+  #      (Data Comparison User's Guide v006 p.17).
+  #  (b) sinal = subtração p/ remover o sinal de maré (mesma fonte, p.6:
+  #      "a subtraction is made ... h_ph = h_phraw - tide_...").
+  # tide_equilibrium NAO entra nesta lista — decisao VERIFICADA, nao omissao:
+  # o CATS2008_v2023 declara `constituent_order: m2 s2 n2 k2 k1 o1 p1 q1 mf mm`,
+  # ou seja, JA inclui as duas principais constituintes de longo periodo
+  # (mf = quinzenal, mm = mensal). Como `corrections.apply` opera sobre a coluna
+  # `tide_ocean`, que apos run_cats_tide contem a predicao do CATS, somar
+  # `tide_equilibrium` do ATL06 duplicaria mf e mm.
+  #
+  # O `tide_equilibrium` do ATL06 e um valor unico que agrega TODOS os termos de
+  # longo periodo (mf, mm, Ssa, Sa, nodal 18,6 anos). Nao ha como somar apenas a
+  # parcela ausente do CATS sem decompo-lo. Entre duplicar mf/mm (as maiores) e
+  # omitir Ssa/Sa (menores), omitir e o erro menor.
+  #
+  # ATENCAO se a maré voltar a ser a do ATL06 (GOT4.8, coluna tide_ocean_got):
+  # nesse caso a decisao muda e `tide_equilibrium` PRECISA ser somado, porque o
+  # ATL06 o fornece separadamente justamente por nao estar em tide_ocean.
+  # A coluna segue preservada em disco para permitir essa alternativa.
+  apply: ["tide_ocean", "dac"]
+  gate_to_floating: true      # aplica tide_ocean só onde mask_class == floating_class
+  fill_threshold: 1.0e30      # |correção| acima disso = inválida -> tratada como 0
+  # tide_equilibrium (LPE, até ~4 cm) é um campo separado no ATL06. Não é
+  # aplicado até verificar se CATS/pyTMD já o inclui; `apply_atl06` só é válido
+  # quando cats.equilibrium_tide_included=false estiver documentado.
+  equilibrium_tide_mode: "excluded_unverified"
+
+# ---- Correção de slope (DEM de referência REMA) ----------------------------
+# Diferenciação por DEM: Δh = h_corr - REMA remove a topografia estática (e seu
+# declive), atacando o alias de slope cross-track (Schröder et al. 2019; Howat
+# et al. 2019). Como dh/dt é a derivada temporal, o offset do epoch do REMA não
+# afeta o resultado. Baixe o REMA da ROI com pipelines/fetch_rema.py.
+slope:
+  enabled: true
+  rema_path: "REMA_ase_32m.tif"   # GeoTIFF EPSG:3031 recortado à ROI
+  max_slope_ref_m: 200                 # |h - REMA| acima disso = blunder/nodata -> sem correção
+
+# ---- Maré CATS2008 (pyTMD) — substitui o GOT4.8 embutido no ATL06 ----------
+# CATS2008 é regional-antártico (grade 2 km, v2023) e resolve cavidades sob as
+# plataformas — melhor que o GOT4.8 global sobre a plataforma da Thwaites.
+# [AÇÃO MANUAL] baixe CATS2008_v2023.nc (1,8 GB) do USAP-DC (dataset 601772) e
+# coloque em data/tide_models/. O download exige reCAPTCHA -> não automatizável.
+# Depois, troque enabled para true e rode: python pipelines/run_cats_tide.py
+cats:
+  enabled: true          # modelo baixado manualmente em data/tide_models/CATS2008_v2023/
+  model_dir: "tide_models"
+  model_file: "CATS2008_v2023.nc"
+  model_name: "CATS2008-v2023"
+  method: "linear"       # interpolação das constantes harmônicas ("linear"|"nearest")
+  extrapolate: true      # extrapola até cutoff_km fora da grade
+  cutoff_km: 10.0
+  apply_flexure: false   # [OPCIONAL] escala a maré na zona de aterramento, onde a
+                         # plataforma não responde 100% à maré (flexão). Só o CATS
+                         # oferece isso. Avaliar ativar para a zona de aterramento.
+  # MEMÓRIA: o modelo circum-antártico tem 1,8 GB. Ele é aberto UMA vez, recortado
+  # à bbox da ROI (+buffer) e os pontos são processados em chunks — sem isso, a
+  # predição em 1,86 M de pontos esgota a RAM.
+  chunk_size: 100000     # pontos por chunk de predição
+  row_batch: 500000      # linhas por row group (leitura/escrita em streaming do Parquet)
+  buffer_km: 50.0        # buffer do recorte do modelo à volta da ROI
+  dask_chunks: null      # chunking dask na leitura (null = leitura direta)
+  equilibrium_tide_included: null  # decidir após auditoria CATS/pyTMD
+
+# ---- Filtragem along-track (filttrack, inspirado no captoolkit) ------------
+# Remove blunders coerentes ao longo da trilha (nuvem, neve soprada, erro de
+# REMA em margem de cisalhamento) que o flag de qualidade e a rejeição por nó
+# não pegam. A ordem along-track é reconstruída por (feixe + t_year), quebrando
+# em trilhas onde o gap de tempo separa granulos distintos.
+filttrack:
+  enabled: true
+  window: 21          # nº de segmentos na janela móvel (ímpar) da mediana along-track
+  n_sigma: 5.0        # rejeita |resíduo| > n_sigma * MAD LOCAL
+  gap_year: 1.0e-4    # gap de t_year (~1 h) que separa trilhas distintas
+  mad_floor_m: 0.1    # piso do MAD (evita super-rejeição onde a trilha é lisa demais)
+  mad_window_factor: 5  # janela do MAD local = window*fator. MAD LOCAL (não por
+                        # trilha): a rugosidade real varia DENTRO da trilha (gelo
+                        # liso vs plataforma riftada vs rocha); um MAD único por
+                        # trilha rejeitava topografia real (33% do gelo flutuante).
+
+# ---- Prioridade 2 (§3): sensibilidade dos filtros --------------------------
+# Os limiares de aceite abaixo são PRÉ-DEFINIDOS e vão para o manifesto ANTES
+# de qualquer comparação (§3.5). Não podem ser ajustados após ver o resultado.
+sensitivity:
+  n_regions: 6          # sub-regiões representativas (tratabilidade: rodar todas
+                        # as configs no domínio inteiro levaria ~14 h)
+  region_km: 50.0
+  seed: 0
+  bootstrap_iters: 1000
+  max_median_dhdt_shift: 0.05          # |Δ mediana dh/dt| tolerada (m/ano)
+  max_xover_dispersion_increase: 0.10  # +10% na dispersão dos crossovers
+  min_coverage_gain: 0.02              # ganho de cobertura considerado "material"
+  max_residual_increase: 0.10          # +10% no RMSE do ajuste
+
+# ---- Velocidade do gelo (MEaSUREs) — backlog #2 ----------------------------
+# Insumo da divergência de fluxo e do cross-check de zonas "estáveis".
+# Baixe com: python pipelines/fetch_velocity.py
+velocity:
+  short_name: "NSIDC-0754"   # Phase-Based Antarctica Ice Velocity Map v1 (450 m)
+  version: "1"
+  vx_var: "VX"
+  vy_var: "VY"
+  path: "velocity_thwaites.nc"
+  # [DECLARAR AO PUBLICAR] o mosaico é de 1996–2018 e o dh/dt de 2019–2025;
+  # a Thwaites acelerou no intervalo -> a divergência de fluxo é conservadora.
+  epoch_note: "MEaSUREs NSIDC-0754 (1996-2018); dh/dt 2019-2025"
+
+# ---- Divergência de fluxo / derretimento basal (cubediv, cubemelt) ---------
+flux:
+  enabled: true
+  grid_res_m: 1000       # resolução do cálculo de ∇·(H·v)
+  smooth_km: 2.0         # suavização de H e v antes de derivar (controla ruído)
+  water_density: 1027.0  # kg/m³ (água do mar) — usado na relação hidrostática
+  smb_path: null         # [OPCIONAL] balanço de massa superficial (m gelo/ano).
+                         # Sem SMB, o derretimento basal sai como "ṁ_b − SMB".
+  min_thickness_m: 10    # abaixo disso o cálculo é instável
+
+# ---- Filtro espaço-temporal (filtst, inspirado no captoolkit) --------------
+# Complementa o filttrack: aquele olha AO LONGO de uma trilha; este compara a
+# vizinhança 2D+tempo, pegando trilhas inteiras deslocadas (nuvem) que o filtro
+# along-track não vê. Desabilitado por padrão — ativar só se a cauda de
+# outliers persistir (o fitsec já faz rejeição robusta por nó).
+filtst:
+  enabled: false
+  cell_km: 5.0        # lado da célula espacial
+  dt_years: 1.0       # janela temporal da célula
+  n_sigma: 5.0
+  min_count: 20       # mínimo de pontos na célula p/ estatística robusta
+  mad_floor_m: 0.1
+  passes: 2           # 2ª passagem com grade deslocada (reduz efeito de borda)
+
+# ---- Cruzamentos / crossovers (xover, inspirado no captoolkit) -------------
+# dh/dt INDEPENDENTE do fitsec (validação cruzada de método) + detecção de viés
+# inter-feixe em cruzamentos quase-simultâneos. Exige track_id (run_filttrack).
+xover:
+  enabled: true
+  subsample: 10          # subamostra os pontos p/ montar a geometria da trilha
+  min_track_points: 50   # trilhas curtas não geram cruzamento útil
+  fit_radius_m: 200      # raio do ajuste de plano local no ponto de cruzamento
+  min_points: 4          # mínimo de pontos por trilha no ajuste local
+  min_dt_years: 0.5      # |Δt| mínimo p/ calcular dh/dt (evita dividir por ~0)
+  # O nº de cruzamentos cresce com (n_asc × n_desc): todas as trilhas dariam
+  # ~1,25 M cruzamentos (~86 min). Para validação, uma amostra aleatória de
+  # trilhas já fixa a mediana com folga. null = usar todas.
+  max_tracks_per_direction: 400
+  seed: 0
+
+# ---- Tiling espacial -------------------------------------------------------
+tiles:
+  tile_km: 50             # lado do tile (computacional: memória por tile)
+  halo_km: 15             # sobreposição entre tiles (~raio de busca) para
+                          # eliminar descontinuidade de borda nos nós
+  chunk: 5000000          # linhas por chunk de leitura (só memória)
+
+# ---- Ajuste de dh/dt -------------------------------------------------------
+dhdt:
+  search_radius_m: 15000  # reduzido de 22 km após o slope correction (REMA): o campo
+                          # ficou ~45% menos ruidoso, permitindo raio menor -> mais
+                          # resolução. 15 km fica acima do espaçamento mínimo de trilha
+                          # (~14 km) para não abrir buracos.
+  node_spacing_m: 5000    # resolução dos nós onde o ajuste é avaliado (computacional).
+                          # NÃO é a grade do mapa (essa é data-driven, Fase 5).
+  min_points: 30          # ~3x os ~9 coeficientes do ajuste 2ª ordem (estabilidade)
+  dt_min_years: 3.0       # span mínimo p/ estimar taxa linear
+  dt_min_years_accel: 4.0 # anos distintos mínimos p/ estimar aceleração
+  t_ref: 2022.0           # centro aritmético de 2019-2025
+  rate_limit: 20.0        # |dh/dt| máx plausível (m/ano) — filtro de blunder
+  accel_limit: 5.0        # |aceleração| máx plausível (m/ano²)
+  poly_order: 2           # ordem espacial do polinômio
+  temp_order: 2           # ordem temporal (inclui termo de aceleração)
+  use_weights: true       # pondera por 1/sigma²
+  max_iter: 5             # iterações de rejeição robusta
+  n_sigma: 3.0            # limiar de rejeição (MAD-sigmas)
+  resid_limit: 5.0        # limiar absoluto de resíduo (m)
+
+# ---- Séries temporais + tendência (Fase 4) ---------------------------------
+# Constrói, por nó e por ANO, uma elevação representativa (ajuste de plano
+# local a+b*dx+c*dy avaliado no nó — remove a inclinação local sem precisar de
+# REMA), formando uma série temporal; depois testa tendência (Mann-Kendall +
+# Sen's slope) por nó, com correção FDR entre nós.
+timeseries:
+  node_spacing_m: 10000     # nós mais espaçados (dados por ano são esparsos)
+  search_radius_m: 30000    # maior que no dh/dt: só ~1/6 dos pontos por época
+  min_points_per_epoch: 10  # mínimo de pontos p/ estimar a elevação de um ano num nó
+  min_epochs: 4             # mínimo de anos com dado p/ testar tendência
+
+# ---- Interpolação (Fase 5 — seleção por validação cruzada) -----------------
+interpolation:
+  # Candidatos avaliados por spatial block CV; vence o de melhor RMSE +
+  # incerteza calibrada. NÃO se assume krigagem a priori.
+  candidates: ["ordinary_kriging", "oi_markov", "idw",
+               "gaussian_kernel", "median_kernel"]
+  neighbors: 32           # k vizinhos p/ os interpoladores locais (escalabilidade)
+  idw_power: 2.0          # expoente do IDW
+  grid_res_m: 5000        # resolução do mapa final (afinável ao alcance do variograma)
+  gauss_sigma_m: null     # [DATA-DRIVEN] σ do kernel gaussiano (null => range/3)
+  median_radius_m: null   # [DATA-DRIVEN] raio do kernel de mediana (null => range/2)
+  cv:
+    strategy: "spatial_block"   # blocos espaciais (evita vazamento por autocorrelação)
+    block_km: 50
+    n_folds: 5
+    seed: 0
+  variogram:
+    lag_m: null           # [DATA-DRIVEN] preenchido pelo variograma empírico
+    model: null           # [DATA-DRIVEN] esférico/exponencial escolhido por ajuste
+    max_lag_m: 150000
+    n_lags: 15
+
+# ---- Testes de tendência (Fase 4) ------------------------------------------
+trend:
+  alpha: 0.05
+  fdr_method: "benjamini-hochberg"   # controla falsos positivos em N pixels
+  mk_variant: "auto"    # 'original' (JJA) ou 'seasonal'/'hamed_rao' (anual)
+
+# ---- SSHA do oceano coberto por gelo marinho (ATL21) -----------------------
+# Produto SEPARADO do balanço de massa. Mede topografia dinâmica do oceano na
+# porção marinha da ROI, a partir dos segmentos de *lead* do ICESat-2.
+#
+# NÃO é medida de "aumento do nível do mar": não há calibração absoluta de
+# deriva contra marégrafos, a janela é de 7 anos numa região dominada por
+# variabilidade dinâmica (Amundsen Sea Low/ENSO/SAM), e a amostragem é
+# condicionada à presença de leads — que depende do estado do gelo marinho, o
+# qual tem tendência própria no período. Esse último ponto é um viés
+# SISTEMÁTICO não estacionário, não ruído. Ver run_sealevel.py.
+#
+# A contribuição da Thwaites ao nível do mar continua vindo de `mass_balance`
+# (dM/dt -> mm SLE), que é a via fisicamente correta.
+sealevel:
+  short_name: "ATL21"     # Gridded Monthly Sea Surface Height Anomaly
+  version: "004"
+  path: "atl21_ase_ssha.parquet"   # recorte gerado por pipelines/fetch_atl21.py
+  # MEDIDO em ago/2022 (pico de gelo marinho): das 447 células de 25 km da ROI,
+  # apenas 21 (4,7%) tinham SSHA válida, com mediana de 2 refsurfs por célula.
+  # Os limiares abaixo saem desse regime real de amostragem, não de convenção.
+  min_refsurfs: 2
+  min_months: 24          # de 84 meses possíveis (2019-2025) => ~29% de preenchimento
+  min_years: 4            # o MK sazonal compara o mesmo mês entre anos distintos
+  grid_res_m: 25000       # grade nativa do ATL21 (não reamostrar sem motivo)
+
+# ---- Balanço de massa / nível do mar (Fase 6) ------------------------------
+mass_balance:
+  ice_density: 917.0      # kg/m³ — adelgaçamento dinâmico (premissa declarada)
+  ocean_area_m2: 3.618e14 # 361.8 Gt = 1 mm SLE
+  # Comprimento de correlação usado para o n_eff do balanço integrado.
+  #
+  # [DATA-DRIVEN — do ERRO, não do sinal] NUNCA usar o alcance do variograma do
+  # CAMPO de dh/dt: mede a estrutura do SINAL glaciológico e cresce com o
+  # domínio (41,8 km só-Thwaites -> 117,8 km no ASE -> 435 km após o QC).
+  #
+  # Valor adotado = MEDIANA do alcance do variograma dos resíduos da CV
+  # espacial, sobre 15 combinações de interpolador x tamanho de bloco
+  # (outputs/tables/error_correlation_sensitivity.json).
+  #
+  # A escolha usa somente a estrutura de resíduos do NOSSO ajuste ATL06. Não
+  # entra produto ICESat-2 em grade como validação ou como fonte de parâmetro.
+  # A incerteza desse comprimento deve ser propagada por sensibilidade própria;
+  # ela permanece uma das principais fontes de incerteza do balanço integrado.
+  correlation_length_m: 34100.0
+  coverage_dist_m: 7500   # uma célula da grade só entra no balanço se houver um nó
+                          # dh/dt a <= esta distância (evita integrar extrapolação)
+
+# ---- Logging ---------------------------------------------------------------
+logging:
+  level: "INFO"
+  rotation: "10 MB"
+  retention: "30 days"
+
+# ---- Correção de firn (GSFC-FDM v1.2.1) ------------------------------------
+# Separa mudança de ALTURA de mudança de MASSA: a densificação do firn baixa a
+# superfície sem perder massa. Sem isto, ρ=917 sobre o dh/dt bruto atribui
+# compactação de firn a perda de gelo.
+# Baixe com: python pipelines/fetch_firn.py   (Zenodo 7221954, acesso aberto)
+# [DECLARAR] o FDM termina em 30/06/2022 e o dh/dt vai a 2025 -> a taxa de FAC
+# é estimada na sobreposição (~3,5 de 7 invernos) e extrapolada.
+firn:
+  enabled: true           # recorte gerado por fetch_firn.py
+  path: "firn_thwaites.nc"
+  fac_var: null            # null => detecta FAC/fac/firn_air_content
+  smb_var: "SMB_a"         # ANOMALIA cumulativa de SMB (m gelo) — NÃO é SMB total.
+                           # Referência climática 1980-2019. Ver SMB_ANOMALY_CAVEAT.
+  smb_total_var: "SMB"     # SMB TOTAL (Snowfall-Sublimation + Rain - Runoff),
+                           # já em m gelo/ANO -> usa-se a MÉDIA temporal, não a derivada.
+  smb_path: "smb_thwaites.nc"
+  epoch_note: "GSFC-FDM v1.2.1 (1980-06/2022); dh/dt 2019-2025"

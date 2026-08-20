@@ -1,0 +1,54 @@
+# Perfil DJF — verão austral (dezembro, janeiro, fevereiro).
+#
+# Objetivo (backlog #1): dar cobertura de FASE ao ciclo anual, hoje impossível
+# com a janela só-JJA. Com JJA sozinho o modelo sazonal é mal condicionado —
+# cond(anual) = 25,2, e cond(+semianual) = 617 — porque cos(2πt) fica quase
+# constante dentro de uma janela de 89 dias e colinear com o intercepto.
+#
+# Medido com a estrutura de fase REAL do ICESat-2 (02/08/2026):
+#
+#   esquema                      cond(anual)  cond(+semianual)  viés residual
+#   JJA (atual)                        25,2             617      4,23 Gt/ano
+#   JJA + DJF                           1,6               5,0    1,89 Gt/ano
+#   JJA + Dez/Mar/Set estreitos         1,3               2,1    1,13 Gt/ano
+#
+# DJF foi escolhido sobre o esquema de janelas espalhadas apesar do viés
+# residual um pouco maior, por três razões que os números acima não capturam:
+#   1. a diferença 1,89 vs 1,13 Gt/ano vem da componente firn/SMB de um modelo
+#      que cobre 3 dos 7 anos, num período anômalo de acumulação — é menor que
+#      a incerteza do próprio exercício;
+#   2. o verão tem nuvem, poça de fusão e superfície molhada; a taxa de
+#      rejeição da QC é DESCONHECIDA e provavelmente bem maior que em JJA
+#      (noite polar). Três meses dão margem para achar céu limpo; um mês de
+#      dezembro pode ser dizimado por uma temporada nublada;
+#   3. DJF em densidade cheia é um produto de verão que se sustenta sozinho,
+#      não apenas uma correção do produto de inverno.
+#
+# ATENÇÃO — dezembro pertence ao verão SEGUINTE
+# ---------------------------------------------
+# `np.floor(t_year)` põe dez/2019 em 2019 e jan-fev/2020 em 2020, partindo um
+# mesmo verão em dois "anos". Isso NÃO afeta o ajuste de dh/dt, que usa tempo
+# contínuo, mas AFETA todo procedimento que reamostra por ano:
+#   - jackknife leave-one-year-out (thwaites/timeseries/uncertainty.py)
+#   - bootstrap em blocos de ano (thwaites/timeseries/acceleration.py)
+#   - `overpass_leverage` não é afetado (agrupa por passagem, não por ano)
+# Antes de usar esses três com dados DJF é preciso definir o "ano de verão"
+# como dez(N) + jan/fev(N+1). Não implementado ainda — não citar incerteza
+# jackknife nem aceleração de DJF sem resolver isto.
+#
+# Cobertura das pontas: com temporal 2019-2025 herdado da base, o primeiro
+# verão entra só com jan/fev de 2019 (dez/2018 fica fora) e o último só com
+# dez/2025. São dois verões parciais nas extremidades — deliberado, para manter
+# o mesmo intervalo temporal do produto JJA e permitir comparação pareada.
+
+project:
+  experiment: "djf"
+
+season:
+  name: "djf"
+  months: [12, 1, 2]
+
+# Há sazonalidade forte na janela combinada -> variante de Mann-Kendall que
+# corrige sazonalidade e autocorrelação.
+trend:
+  mk_variant: "seasonal"

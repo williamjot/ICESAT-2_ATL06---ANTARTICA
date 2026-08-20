@@ -1,0 +1,67 @@
+# Dados e resultados
+data/
+outputs/
+logs/
+tmp/
+raw_temp/
+mockups/
+extracted_images/
+
+# Produtos científicos, imagens, documentos e arquivos compactados
+*.h5
+*.nc
+*.tif
+*.tiff
+*.parquet
+*.npy
+*.npz
+*.png
+*.jpg
+*.jpeg
+*.jfif
+*.webp
+*.gif
+*.pdf
+*.ppt
+*.pptx
+*.zip
+
+# Documentação interna: o README é o único Markdown publicado
+*.md
+!README.md
+
+# Pipeline legado e ferramentas locais
+scripts/
+.agents/
+.claude/
+**/build_slides*.py
+**/gerar_apresentacao*.py
+**/migrate_*.py
+**/run_djf_*.sh
+**/slide_content*.json
+**/slide_summary*.txt
+**/scratch_*
+**/SIGAA*
+
+# Python, testes, builds e ambientes
+**/__pycache__/
+*.py[cod]
+*.egg
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+.venv/
+venv/
+
+# Configuração local e editores
+.env
+.env.*
+*.log
+.vscode/
+.idea/
+*.swp
+*.swo
